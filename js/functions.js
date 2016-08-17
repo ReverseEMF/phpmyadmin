@@ -328,22 +328,173 @@ function PMA_prepareForAjaxRequest($form)
 }
 
 /**
- * Generate a new password and copy it to the password input areas
+ * Returns a random integer between min (included) and max (included).
+ * 
+ * @param {integer} min - integer value of resulting random number (inclusive)
+ * @param {integer} max - integer value of resulting random number (inclusive)
+ * @returns {integer}
+ */ 
+function getRandomInt(min, max) 
+{
+    min = Math.ceil(min);
+    max = Math.floor(max);
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/**
+ * Generate a new password that complies with the mySQL Password Validation 
+ * Plugin (ver 7.2.2) default settings, with one exception.  The plugin password
+ * length default is 8.  This function produces a 16 character password.  Once 
+ * the password is generated, it is copyed to the password input areas in the 
+ * supplied password form object argument.
+ * 
+ * This function will recognize both the manditory "passwd_form" argument AND
+ * a number of optional arguments (i.e. fished from the intrinsic "arguments" 
+ * array--arguments[0] is the mandatory arg, arguments[1:4] are the optional
+ * arguments):
+ * - [1] Number of mixed case characters--will result in, at least, that number 
+ *       + 1, alphanumeric characters in the password. Thus, the value '1' will
+ *       result in at least one Uppercase char and at least one lowercase char. 
+ *       The value '2' wlll result in at least 2 Uppercase chars and at least 
+ *       one lowercase char, etc.
+ * - [2] Number of numeric characters.
+ * - [3] Number of special characters.  Currently from the set of {#$%!@&}.
+ * - [4] Password length.  The mySQL Password Validation Plugin defaults the 
+ *       password length to 8.  This function uses a default of 16.
  *
- * @param passwd_form object   the form that holds the password fields
+ * Note: I added the optional arguments for possible future use.  It was simple
+ *       to do and just seemed a logical step, considering these values, now,
+ *       exist, and could change.  This function can still be called the way it
+ *       always was before, so it's backward compatible.
+ *       
+ * @param {object} passwd_form - the form object that holds the password fields
+ * @param {integer} min_num_mixedcase - [optional] At least this number of 
+ *    mixedcase characters (e.g. 2 means: 2 lowercase and 2 uppercase).
+ * @param {integer} min_num_numeric - [optional] At least this number of numeric
+ *    characters.
+ * @param {integer} min_num_spchars - [optional] At least this number of special
+ *    characters.
+ * @param {integer} passwordlength - [optional] Exact length of resulting 
+ *    password, unless the previous three arguments mandate a longer password.
+ *    For instance, if the following argments are passed:
+ *    - min_num_mixedcase = 4
+ *    - min_num_numeric = 3
+ *    - min_num_spchars = 2
+ *    - passwordlength = 8
+ *    the actual length of the password will be:
+ *      (4 * 2) + 3 + 2 = 13
+ *    i.e. the passwordlength value of '8' will be ignored.
+ *    FYI: if only the first three arguments are passed, then the default 
+ *         password length of '16' will be honored and the resulting password
+ *         will be at least 16 characters long.  And, because the length of the 
+ *         password exceeds the combined minimum number of stipulated characters 
+ *         (i.e. '13' in the above example), the actual number of the various 
+ *         character types will, likely, be larger than the minimums. For
+ *         example, there might actually be 6 uppercase, 3 lowercase, 3 numeric,
+ *         and 4 special characters, for a total of 16 characters.  This 
+ *         function automatically, pads the password with as many of the
+ *         different character types, beyond the minimums, as will fit.  Where
+ *         passwords are concerned, more is better!
  *
  * @return boolean  always true
  */
 function suggestPassword(passwd_form)
 {
-    // restrict the password to just letters and numbers to avoid problems:
-    // "editors and viewers regard the password as multiple words and
-    // things like double click no longer work"
-    var pwchars = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWYXZ";
-    var passwordlength = 16;    // do we want that to be dynamic?  no, keep it simple :)
+    // Default parameters
+    var min_num_mixedcase = 1;
+    var min_num_numeric   = 1;
+    var min_num_spchars   = 1;
+    var passwordlength    = 16;  
+      
+    // Locate any optional arguments and use to override defaults
+    if (arguments.length > 1) 
+    {
+        min_num_mixedcase = arguments[1];
+    }
+    
+    if (arguments.length > 2) 
+    {
+        min_num_numeric = arguments[2];
+    }
+    
+    if (arguments.length > 3) 
+    {
+        min_num_spchars = arguments[3];
+    }
+    
+    if (arguments.length > 4) 
+    {
+        passwordlength = arguments[4];
+    }
+    
+    // Build a password that complies with the current Password Validation 
+    // Plugin defaults.
+    var temp;
+    var pw_lc_chars = "abcdefghijklmnopqrstuvwxyz";
+    var pw_uc_chars = "ABCDEFGHIJKLMNOPQRSTUVWYXZ";
+    var pw_nums = "0123456789";
+    // I could find no documentation specifying which nonalphanumeric characters
+    // are suitable/allowed.  Just that "special characters" are the set of ALL
+    // nonalphanumeric characters.  But, it seems to me, some nonalphanumeric
+    // characters are less desirable for such reasons as readability (especially
+    // when considering different fonts).  For example, the '|' (vertical bar)
+    // character could be confused with the lowercase 'L' or even the character
+    // for the numeral 'one'.  Also, the character commonly used for escaping
+    // (the backward slash '\') has potential for problems.  Thus, I used only
+    // characters that I deemed clearly readable (i.e. alpha-ish) and/or non-
+    // troublesome.  But, of course, feel free to add or subtract as you please.
+    var pw_sp_chars = "#$%!@&";
+    var pw_rand_lc_chars = '';
+    var pw_rand_uc_chars = '';
+    var pw_rand_sp_chars = '';
+    var pw_rand_nums = '';
     var passwd = passwd_form.generated_pw;
-    var randomWords = new Int32Array(passwordlength);
 
+    // Find out if there's enough room in the passwordlength for all this 
+    // diversity. 
+    var min_num_mixedcase_dbld = min_num_mixedcase << 1; // double it to make room for that number of lowercase AND uppercase chars
+    var min_sum = min_num_mixedcase_dbld + min_num_numeric + min_num_spchars;
+    if (min_sum > passwordlength)
+    {
+        // Sorry folks, but the password has to be longer than requested in 
+        // order to comply with the minimum constraints.
+        passwordlength = min_sum;
+    }
+    else if (min_sum < passwordlength)
+    {
+        // Then, there's extra room! Who says we can't have more?! Arbitrarily 
+        // increase the min values!
+        var extra_room = passwordlength - min_sum;
+
+        if (extra_room > min_num_mixedcase_dbld)
+        {
+            temp = getRandomInt(min_num_mixedcase_dbld, extra_room + min_num_mixedcase_dbld);
+            // Something interesting happens here.  If min_num_mixedcase_dbld
+            // is an odd number, then the binary shift right will reduce the 
+            // value to half - 0.5.  If you double the final result, you will 
+            // get a number that is 1 less than the original number.  But, this
+            // is OK because it will still meet the minimum requirement and add
+            // a tiny bit of obufuscation.
+            extra_room -= temp - min_num_mixedcase_dbld; 
+            min_num_mixedcase_dbld = temp;
+            min_num_mixedcase = min_num_mixedcase_dbld >> 1;
+        }
+        
+        if (extra_room > min_num_numeric)
+        {
+            temp = getRandomInt(min_num_numeric, extra_room + min_num_numeric);
+            extra_room -= temp - min_num_numeric;
+            min_num_numeric = temp;
+        }
+
+        if (extra_room > min_num_spchars)
+        {
+            min_num_spchars = getRandomInt(min_num_spchars, extra_room + min_num_spchars);
+        }
+    }
+    
+    // Acquire some randomness
+    var randomWords = new Int32Array(passwordlength);
     passwd.value = '';
 
     // First we're going to try to use a built-in CSPRNG
@@ -359,11 +510,56 @@ function suggestPassword(passwd_form)
             randomWords[i] = Math.floor(Math.random() * pwchars.length);
         }
     }
+    
+    // Build the password
+    var k = 0;
+    var m = min_num_mixedcase;
 
-    for (var i = 0; i < passwordlength; i++) {
-        passwd.value += pwchars.charAt(Math.abs(randomWords[i]) % pwchars.length);
+    for (; k < m; ++k)
+    {
+        // Collect some randomly selected uppercase characters
+        pw_rand_uc_chars += pw_uc_chars.charAt(Math.abs(randomWords[k]) % pw_uc_chars.length);
     }
+    
+    m = min_num_numeric + k;
 
+    for (; k < m; ++k)
+    {
+        // Collect some randomly selected numeric characters
+        pw_rand_nums += pw_nums.charAt(Math.abs(randomWords[k]) % pw_nums.length);
+    }
+    
+    m = min_num_spchars + k;
+
+    for (; k < m; ++k)
+    {
+        // Collect some randomly selected special characters
+        pw_rand_sp_chars += pw_sp_chars.charAt(Math.abs(randomWords[k]) % pw_sp_chars.length);
+    }
+    
+    m = passwordlength;
+
+    for (; k < m; ++k)
+    {
+        // And finally some lowercase characters to pad the rest of the password
+        pw_rand_lc_chars += pw_lc_chars.charAt(Math.abs(randomWords[k]) % pw_lc_chars.length);
+    }
+    
+    // Concatinate them all together
+    passwd.value = '' + pw_rand_uc_chars + pw_rand_nums + pw_rand_sp_chars + pw_rand_lc_chars;
+    
+    // Shuffle the password string
+    var a = passwd.value.split(""),
+    n = a.length;
+    for(var i = n - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = a[i];
+        a[i] = a[j];
+        a[j] = tmp;
+    }
+    passwd.value = a.join("");
+    
+    // Share the result
     passwd_form.text_pma_pw.value = passwd.value;
     passwd_form.text_pma_pw2.value = passwd.value;
     return true;
